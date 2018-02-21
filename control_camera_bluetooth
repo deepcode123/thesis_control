@@ -1,0 +1,347 @@
+import lutorpy as lua
+import numpy as np
+import time
+import cv2
+import sys
+sys.path.append("/media/ubuntu/D4A8-97187/Documents")
+import SmartMotor_s3
+import bluetooth
+import select
+import operator
+
+
+require("image")
+require("cunn")
+require("cudnn")
+
+
+torch.setdefaulttensortype('torch.FloatTensor')
+
+###seting bluetooth
+server_sock=bluetooth.BluetoothSocket( bluetooth.RFCOMM )
+port = 1
+server_sock.bind(("",port))
+server_sock.listen(1)
+
+port = server_sock.getsockname()[1]
+
+uuid = "94f39d29-7d6d-437d-973b-fba39e49d4ee"
+
+bluetooth.advertise_service( server_sock, "AquaPiServer",service_id = uuid, service_classes = [ uuid, bluetooth.SERIAL_PORT_CLASS ],profiles = [ bluetooth.SERIAL_PORT_PROFILE ] )
+
+print "Waiting for connection on RFCOMM channel %d" % port
+
+client_sock, client_info = server_sock.accept()
+print "Accepted connection from ", client_info
+client_sock.setblocking(0)
+
+
+###Path to decoder/model-best.net and a single image in CamVid dataset
+model = '/media/ubuntu/D4A8-97187/ENet-learning/decoder_model/model-94.net'
+
+### setup 
+
+img = {}
+number = 0
+slope = []
+lastxpoint = []
+largenum = 0
+gps = 0
+turnnum = 0
+framenum = 0
+leftpoint = 0
+
+###Load model from file
+
+model = torch.load(model)
+model._cuda()
+model._clearState()
+#print(model)
+
+###set video record
+
+fourcc = cv2.cv.CV_FOURCC('P','I','M','1')
+finvid = cv2.VideoWriter('trajroadn3.avi',fourcc, 60.0, (640,360))
+
+###Load image from file
+
+frame = require("frame.framecamera")
+source = {}
+frame._init(source)
+
+
+while frame != None:
+     start = time.time()
+     img = frame.forward(img)
+     
+     if img._dim() == 3:
+        img = img._view(1, img._size(1), img._size(2), img._size(3))
+
+     scaledImg = torch.Tensor(1, 3, 1 * img._size(3), 1 * img._size(4))
+     scaledImg[0] = img[0]    
+     scaledImgGPU = torch.CudaTensor(scaledImg._size())
+     scaledImgGPU._copy(scaledImg)
+     scaledImg = scaledImgGPU
+     
+###Forward the image and print out the result
+
+     output = model._forward(scaledImg)._squeeze()
+     _, winners = output._max(1)
+     cutorch.synchronize()
+     winner = winners._squeeze()._float()
+     #print winner
+     result = winner.asNumpyArray()   #convert to numpy array
+
+ ###bird's eye view
+     src = np.array([[193,190], [433,193],[24,330], [614,334]], np.float32)
+     objpts = np.array([[240,60], [480,60],[240,300], [480,300]], np.float32)
+     persp_matrix = cv2.getPerspectiveTransform(src, objpts)
+     out = cv2.warpPerspective(result, persp_matrix, (750,320))
+     out = cv2.resize(out, (640, 360))
+
+###bluetooth
+     try:  
+        ready = select.select([client_sock],[],[],0)
+        if ready[0]:
+           gps = client_sock.recv(1024)
+        if gps == None: break
+        if (gps != "1") and (gps != "2") and (gps != "3") and (gps != "4") and (gps != "5") and (gps != "6"):
+           gps = "3"
+           print "wrong"
+	print "received [%s]" % gps
+
+     except IOError:
+	pass
+	client_sock.close()
+	server_sock.close()
+	print "all done"
+
+###image processing
+     count = 0
+     pointnum = 0
+     blocknum = 0
+     returnnum = 0
+     enterblock = 0
+     flag = 0
+     mid = {}
+     mid_y = {}
+     area = {}
+     x = {}
+     y = {}
+     h = {}
+     w = {}
+     mid_xx = []
+     mid_yy = []
+     turn = []
+     
+     c = {}
+     n = 7
+     num = 0
+     width = np.size(out, 1)
+     height = np.size(out, 0)
+    
+     img = np.array(out, dtype = np.uint8)
+     img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)   #gray to brg
+
+
+     for i in range(0, n):
+         cv2.rectangle(out, (0,i*height/(n)), (width , (i+1)*height/(n)), (0,0,0),4) #draw blocks
+  
+     binary = cv2.inRange(out, 2, 2)     #binary image threshold
+
+
+
+     contours, hierarchy = cv2.findContours(binary,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)  #connected component
+     cv2.drawContours(img,contours, -1 ,( 0 , 100 , 255 ), 2 )
+
+     areas = [cv2.contourArea(c) for c in contours]    #calculate area of each block
+
+     for block in range(len(areas)):
+              if areas[block] > 4000:
+                 cnt=contours[block]
+                 area[count] = areas[block]      #save areas to area and recount
+                 x[count],y[count],w[count],h[count] = cv2.boundingRect(cnt)
+                 cv2.rectangle(img,(x[count],y[count]),(x[count]+w[count],y[count]+h[count]),(0,0,255),2)    #draw rectangle for each block
+                 mid_y[count] = (2*y[count]+h[count])/2     #seperate y axis to compare
+                 count = count + 1
+
+     if gps == "3" or gps == "4" or gps == "5" or gps == "6":
+        if leftpoint == 1:
+           right = 0
+           left = 1
+        else:
+           right = 1
+           left = -1
+        print "gps = 3"
+     elif gps == "1":
+        right = 1
+        left = -1
+        leftpoint = 0
+        print "gps = 1"
+     elif gps == "2":
+        right = 0
+        left = 1
+        leftpoint = 1
+        print " gps = 2"
+         
+    
+     while num < count:
+           finalarea = []
+           finalmidpoint = []
+           blockwidth = []
+           if num == count-1:    #find point at last block
+              num = num + 1
+           else:              #find point at normal block
+              midtest_y = (2*y[num+1]+h[num+1])/2  
+              if gps == "3":
+                if midtest_y < 0.5*height/n:
+                   num = count
+                   print "break 1"
+                   break 
+              if gps == "1" or gps == "2":
+                if midtest_y < 1*height/n:
+                   num = count
+                   print "break 1"
+                   break       
+              if framenum == 1:
+                if midtest_y < 1*height/n:
+                   num = count
+                   print "break 1"
+                   break
+              if abs(midtest_y - mid_y[num]) < height/(2*n):  
+                  if x[num]-(x[num+1]+w[num+1]) < 10:                  #two blocks are too close
+                     num = num + 2
+                     print "<10"
+                     if num > count - 2:
+                         break
+                  if pointnum == 0:
+                     gps == "4"
+                     break       
+                  while abs(midtest_y - mid_y[num]) < height/(2*n):     #if one stripe has two blocks
+                        num = num + 1
+                        if num < count - 1: 
+                            midtest_y = (2*y[num+1]+h[num+1])/2
+                            blocknum = blocknum + 1
+                            flag = 1
+                        else:
+                            print "break 2"
+                            break  
+                  if flag == 1:
+                     enterblock = enterblock + 1 
+                     
+                     flag = 0  
+                  print "block: %d" %blocknum   
+                  
+                  if blocknum > 0 and framenum == 1:
+                     for t in range(blocknum+1):    
+                         #if pointnum == 0:
+                         #      finalmidpoint.append(abs(lastxpoint[number - 1] - ((d*x[num - tt]+p*w[num - tt])/d)))
+                         #else:                          
+                               finalmidpoint.append(abs(lastxpoint[number - 1] - ((x[num - t]+right*w[num - t])+ left * 50)))
+                               
+                     print "point: " ,finalmidpoint       
+                     min_i, min_v = min(enumerate(finalmidpoint), key = operator.itemgetter(1))
+                     print "frame: %d" %min_i 
+                     print "framenum:%d" %min_v
+                     mid[pointnum] = ((x[num -  min_i]+right*w[num -  min_i])+ left * 65, (2*y[num - min_i]+h[num - min_i])/2)   
+                     mid_xx.append((x[num -  min_i]+right*w[num -  min_i])+ left * 65)
+                     mid_yy.append((2*y[num - min_i]+h[num -  min_i])/2)             
+                     cv2.circle(img, mid[pointnum], 1, (0, 255, 200), 5)    #draw trajectory point
+                     pointnum = pointnum + 1 
+                     blocknum = 0 
+                     num = num + 1
+                  
+                  if blocknum > 0 and framenum == 0:
+                     
+                     for tt in range(blocknum+1):
+                         blockwidth.append(w[num - tt])
+                         print "width: ",blockwidth[tt]
+                         if blockwidth[tt] > 86:
+                            #if pointnum == 0:
+                            #   finalmidpoint.append(abs(lastxpoint[number - 1] - ((d*x[num - tt]+p*w[num - tt])/d)))
+                    
+                           # else:
+                               finalmidpoint.append(abs(mid_xx[pointnum - 1] - ((x[num - tt]+right*w[num - tt])+ left * 50)))
+                            
+                         else:
+                              finalmidpoint.append(1000)
+                     print "point: " ,finalmidpoint       
+                     min_i, min_v = min(enumerate(finalmidpoint), key = operator.itemgetter(1))
+                     print "small: %d" %min_i 
+                     print "smallnum:%d" %min_v
+                     mid[pointnum] = ((x[num -  min_i]+right*w[num -  min_i])+ left * 65, (2*y[num - min_i]+h[num - min_i])/2)   
+                     mid_xx.append((x[num -  min_i]+right*w[num -  min_i])+ left * 65)
+                     mid_yy.append((2*y[num - min_i]+h[num -  min_i])/2)             
+                     cv2.circle(img, mid[pointnum], 1, (0, 255, 200), 5)    #draw trajectory point
+                     pointnum = pointnum + 1 
+                     blocknum = 0 
+                     num = num + 1
+              else:
+                 mid[pointnum] = ((x[num]+right * w[num])+ left * 65, (2*y[num]+h[num])/2)               #calculate trajectory point
+                 mid_xx.append((x[num]+right*w[num])+ left * 65)
+                 mid_yy.append((2*y[num]+h[num])/2)
+                 cv2.circle(img, mid[pointnum], 1, (0, 255, 200), 5)    #draw trajectory point
+                 pointnum = pointnum + 1
+                 num = num + 1   
+     if enterblock > 2:
+        framenum = 1
+     else:
+        framenum = 0
+     mid_xx = np.array(mid_xx)
+     mid_yy = np.array(mid_yy)
+     cv2.circle(img, (320,360), 1, (200, 200, 250), 8)
+
+    
+     if len(mid_xx) >= 1:
+        A = np.vstack([mid_xx, np.ones(len(mid_xx))]).T
+        m, c = np.linalg.lstsq(A, mid_yy)[0]
+        slope.append(-1/m)
+        lastxpoint.append(mid_xx[len(mid_xx)-1])
+
+        if (abs(slope[number - 1])) > 0.65 and (abs(slope[number])) > 0.65:
+              largenum = largenum + 1
+              print "largenum = %d" %largenum
+              if largenum == 1:
+                    turn.append(slope[number - 1])
+                    newslope = turn[0]
+                    print "turn"
+                    print newslope
+        if (abs(slope[number])) < 0.35:
+              if largenum >= 1:
+                   slope[number] = -1*newslope
+                   returnnum = 1
+                   turnnum = turnnum + 1
+                   if turnnum == 1:
+                     turn = []
+                     largenum = 0
+                     turnnum = 0
+                     print"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        if number == 0 or returnnum == 1 or abs((slope[number])-(slope[number - 1])) < 0.3:
+              cv2.line(img, (mid_xx[0], int(round(m*mid_xx[0] + c))), (mid_xx[len(mid_xx)-1], int(round(m*mid_xx[len(mid_xx)-1] + c))), (150, 200, 250), 2) 
+              print (mid_xx[0], int(round(m*mid_xx[0] + c)))       
+              print (mid_xx[len(mid_xx)-1], int(round(m*mid_xx[len(mid_xx)-1] + c)))
+              SmartMotor_s3.motorMov(gps, slope[number], mid_xx[(len(mid_xx)-1)] - 320, 0)
+        print "number = %d" %number
+        print mid_xx[(len(mid_xx)-1)] - 320
+        print "slope: ",slope[number]
+        if returnnum == 1:
+            slope[number] = 0
+        number = number + 1
+     else:
+        m = 0 
+        slope.append(m)
+        lastxpoint.append(320)
+        SmartMotor_s3.motorMov(gps, 0, 0, 1)
+        print "stop"
+        print "number = %d" %number  
+        number = number + 1
+           
+     end = time.time()
+     fps = 1/(end - start)
+     print "fps: %f " %fps
+     finvid.write(img) 
+     cv2.imshow("crop", img)
+     cv2.waitKey(1)
+finvid.release()  
+cv2.destroyAllWindows()
+           
