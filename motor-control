@@ -1,0 +1,512 @@
+import serial
+import time
+import numpy as np
+
+def WheelSpeeds(ser,speedR,speedL):
+    speedtm = speedR * 1538.7898089171974522292993630573
+    speedR = speedtm
+
+    speedtm = speedL * 1538.7898089171974522292993630573
+    speedL = speedtm
+    
+    if(speedR == 0):
+        speedR = 1
+    if(speedL == 0):
+        speedL = 1
+
+    p_star = bytearray([0x80,0x47,0x20])
+    p_R = bytearray([0x81,0x56,0x3d])
+    p_L = bytearray([0x82,0x56,0x3d])
+    if(speedR<0):
+        speedR = -speedR
+        p_R.append(0x2d)
+        
+    if(speedL>0):
+        p_L.append(0x2d)
+    else:
+        speedL = -speedL
+    
+    old_temp2 = 0
+    for i in range(10,0,-1):
+        temp = speedR%(pow(10,i))
+        temp2 = int(temp/(pow(10,i-1)))
+        if(temp > speedR or (temp2 == 0 and old_temp2 == 0)):
+            continue
+        old_temp2 = 1
+        p_R.append(temp2+0x30)
+    
+    old_temp2 = 0
+    for i in range(10,0,-1):
+        temp = speedL%(pow(10,i))
+        temp2 = int(temp/(pow(10,i-1)))
+        if(temp > speedL or (temp2 == 0 and old_temp2 == 0)):
+            continue
+        old_temp2 = 1
+        p_L.append(temp2+0x30)
+    
+    p_R.append(0x20)
+    p_L.append(0x20)
+    
+    ser.write(p_R)
+#    time.sleep(0.01)
+    ser.write(p_L)
+#    time.sleep(0.01)
+    ser.write(p_star)
+#    time.sleep(0.01)
+    if(ser.isOpen()):
+        return 1
+    else:
+        return 0
+#-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+    
+def initiallize(com):
+    ser = serial.Serial()  # open serial port
+    ser.baudrate = 9600
+    ser.port = com
+    ser.bytesize = serial.EIGHTBITS
+    ser.parity = serial.PARITY_NONE
+    ser.stopbits = serial.STOPBITS_ONE
+#    print(ser.name)         # check which port was really used
+    ser.write_timeout = 10
+    ser.open()
+    return ser
+
+def SetSpeedMod(ser):
+    p_speed_R = bytearray([0x81,0x4d,0x56,0x20])
+    p_speed_L = bytearray([0x82,0x4d,0x56,0x20])
+    p_acc_R = bytearray([0x81,0x41,0x3d,0x31,0x30,0x30,0x30,0x20])
+    p_acc_L = bytearray([0x82,0x41,0x3d,0x31,0x30,0x30,0x30,0x20])
+    ser.write(p_speed_R)
+    time.sleep(0.01)
+    ser.write(p_speed_L)
+    time.sleep(0.01)
+    ser.write(p_acc_R)
+    time.sleep(0.01)
+    ser.write(p_acc_L)
+    time.sleep(0.01)
+    return 0
+
+def fuzzyforwardR(a, b):
+   PVB = 400
+   PB = 370
+   PM = 330
+   # a is PS
+   if (a >= 0) and (a < 0.45):
+       ai_ps = (1/0.45) * a
+   elif (a >= 0.45) and (a < 0.9):
+       ai_ps = -(1/0.45) * a + 2
+   else:
+       ai_ps = 0
+
+   # a is PB
+   if (a >= 0.45) and (a < 0.9):
+       ai_pb = (1/0.45) * a - 1
+   elif a >= 0.9:
+       ai_pb = 1
+   else:
+       ai_pb = 0
+       
+   # a is ZO
+   if (a >= 0) and (a < 0.45):
+      ai_zo = -(1/0.45) * a + 1
+   elif (a < 0) and (a > -0.45):
+       ai_zo = (1/0.45) * a + 1
+   else:
+       ai_zo = 0
+
+   # a is NS
+   if (a <= 0) and (a > -0.45):
+       ai_ns = -(1/0.45) * a
+   elif (a <= -0.45) and (a > -0.9):
+       ai_ns = (1/0.45) * a + 2
+   else:
+       ai_ns = 0
+       
+   # a is NB
+   if (a <= -0.45) and (a > -0.9):
+       ai_nb = -(1/0.45) * a - 1
+   elif a <= -0.9:
+       ai_nb = 1
+   else:
+       ai_nb = 0    
+
+   # b is P
+   if (b >= 0) and (b < 17):
+       bi_p = (1/17) * b
+   elif b < 0:
+       bi_p = 0
+   else:
+       bi_p = 1
+
+   # b is ZO
+   if (b >= 0) and (b < 17):
+       bi_zo = -(1/17) * b + 1
+   elif (b < 0) and (b >= -17):
+       bi_zo = (1/17) * b + 1
+   else:
+       bi_zo = 0
+
+   # b is N
+   if (b <= 0) and (b >= -17):
+       bi_n = -(1/17) * b
+   elif b < -17:
+       bi_n = 1
+   else:
+       bi_n = 0
+
+
+   ###rules
+   hR1 = min(ai_nb, bi_n)
+   print "rule1: %f\n " %hR1
+   hR2 = min(ai_nb, bi_zo)
+   print "rule2: %f\n " %hR2
+   hR3 = min(ai_nb, bi_p)
+   print "rule3: %f\n " %hR3
+   hR4 = min(ai_ns, bi_n)
+   print "rule4: %f\n " %hR4
+   hR5 = min(ai_ns, bi_zo)
+   print "rule5: %f\n " %hR5
+   hR6 = min(ai_ns, bi_p)
+   print "rule6: %f\n " %hR6
+   hR7 = min(ai_zo, bi_n)
+   print "rule7: %f\n " %hR7
+   hR8 = min(ai_zo, bi_zo)
+   print "rule8: %f\n " %hR8
+   hR9 = min(ai_zo, bi_p)
+   print "rule9: %f\n " %hR9
+   hR10 = min(ai_pb, bi_n)
+   print "rule10: %f\n " %hR10
+   hR11 = min(ai_pb, bi_zo)
+   print "rule11: %f\n " %hR11
+   hR12 = min(ai_pb, bi_p)
+   print "rule12: %f\n " %hR12
+   hR13 = min(ai_ps, bi_n)
+   print "rule13: %f\n " %hR13
+   hR14 = min(ai_ps, bi_zo)
+   print "rule14: %f\n " %hR14
+   hR15 = min(ai_ps, bi_p)
+   print "rule15: %f\n " %hR15
+
+   ###inference
+   '''
+   hLPVB = max(hR8, hR9, hR11, hR12, hR14)
+   hLPB = max(hR3, hR5,hR6, hR7, hR10, hR13, hR15)
+   hLPM = max(hR1, hR2, hR4)
+   hRPVB = max(hR1, hR2,hR5, hR7, hR8)
+   hRPB = max(hR3, hR4, hR6, hR9, hR10, hR13, hR14)
+   hRPM = max(hR11, hR12, hR15)
+   '''
+   hLPM =max(hR1,hR2)
+   hLPB = max( hR4, hR5, hR6)
+   hLPVB = max(hR3,hR7, hR8, hR9, hR10, hR11, hR12,  hR13, hR14, hR15)
+   hRPM = max( hR11,hR12)
+   hRPB = max(hR6,hR9,hR10, hR13, hR14, hR15)
+   hRPVB = max(hR1, hR2, hR3, hR4,hR5,  hR7, hR8)
+   if (hLPVB + hLPB + hLPM) == 0 or (hRPVB + hRPB + hRPM) == 0:
+      Lmotor = 0
+      Rmotor = 0
+   else:
+      Lmotor = (PVB * hLPVB + PB * hLPB + PM * hLPM) / (hLPVB + hLPB + hLPM)
+      Rmotor = (PVB * hRPVB + PB * hRPB + PM * hRPM) / (hRPVB + hRPB + hRPM)
+ 
+   return Lmotor, Rmotor
+
+def fuzzyforwardL(a, b):
+   PVB = 400
+   PB = 370
+   PM = 330
+   # a is PS
+   if (a >= 0) and (a < 0.45):
+       ai_ps = (1/0.45) * a
+   elif (a >= 0.45) and (a < 0.9):
+       ai_ps = -(1/0.45) * a + 2
+   else:
+       ai_ps = 0
+
+   # a is PB
+   if (a >= 0.45) and (a < 0.9):
+       ai_pb = (1/0.45) * a - 1
+   elif a >= 0.9:
+       ai_pb = 1
+   else:
+       ai_pb = 0
+       
+   # a is ZO
+   if (a >= 0) and (a < 0.45):
+      ai_zo = -(1/0.45) * a + 1
+   elif (a < 0) and (a > -0.45):
+       ai_zo = (1/0.45) * a + 1
+   else:
+       ai_zo = 0
+
+   # a is NS
+   if (a <= 0) and (a > -0.45):
+       ai_ns = -(1/0.45) * a
+   elif (a <= -0.45) and (a > -0.9):
+       ai_ns = (1/0.45) * a + 2
+   else:
+       ai_ns = 0
+       
+   # a is NB
+   if (a <= -0.45) and (a > -0.9):
+
+       ai_nb = -(1/0.45) * a - 1
+   elif a <= -0.9:
+       ai_nb = 1
+   else:
+       ai_nb = 0    
+
+   # b is P
+   if (b >= 0) and (b < 30):
+       bi_p = (1/30) * b
+   elif b < 0:
+       bi_p = 0
+   else:
+       bi_p = 1
+
+   # b is ZO
+   if (b >= 0) and (b < 30):
+       bi_zo = -(1/30) * b + 1
+   elif (b < 0) and (b >= -30):
+       bi_zo = (1/30) * b + 1
+   else:
+       bi_zo = 0
+
+   # b is N
+   if (b <= 0) and (b >= -30):
+       bi_n = -(1/30) * b
+   elif b < -30:
+       bi_n = 1
+   else:
+       bi_n = 0
+
+
+   ###rules
+   hR1 = min(ai_nb, bi_n)
+   print "rule1: %f\n " %hR1
+   hR2 = min(ai_nb, bi_zo)
+   print "rule2: %f\n " %hR2
+   hR3 = min(ai_nb, bi_p)
+   print "rule3: %f\n " %hR3
+   hR4 = min(ai_ns, bi_n)
+   print "rule4: %f\n " %hR4
+   hR5 = min(ai_ns, bi_zo)
+   print "rule5: %f\n " %hR5
+   hR6 = min(ai_ns, bi_p)
+   print "rule6: %f\n " %hR6
+   hR7 = min(ai_zo, bi_n)
+   print "rule7: %f\n " %hR7
+   hR8 = min(ai_zo, bi_zo)
+   print "rule8: %f\n " %hR8
+
+   hR9 = min(ai_zo, bi_p)
+   print "rule9: %f\n " %hR9
+   hR10 = min(ai_pb, bi_n)
+   print "rule10: %f\n " %hR10
+   hR11 = min(ai_pb, bi_zo)
+   print "rule11: %f\n " %hR11
+   hR12 = min(ai_pb, bi_p)
+   print "rule12: %f\n " %hR12
+   hR13 = min(ai_ps, bi_n)
+   print "rule13: %f\n " %hR13
+   hR14 = min(ai_ps, bi_zo)
+   print "rule14: %f\n " %hR14
+   hR15 = min(ai_ps, bi_p)
+   print "rule15: %f\n " %hR15
+
+   ###inference
+   '''
+   hLPVB = max(hR8, hR9, hR11, hR12, hR14)
+   hLPB = max(hR3, hR5,hR6, hR7, hR10, hR13, hR15)
+   hLPM = max(hR1, hR2, hR4)
+   hRPVB = max(hR1, hR2,hR5, hR7, hR8)
+   hRPB = max(hR3, hR4, hR6, hR9, hR10, hR13, hR14)
+   hRPM = max(hR11, hR12, hR15)
+   '''
+   hLPM = hR1
+   hLPB = max(hR2, hR4, hR5,hR6,hR7, hR13)
+   hLPVB = max(hR3, hR8, hR9, hR10, hR11, hR12, hR14, hR15)
+   hRPM = (hR12, hR13)
+   hRPB = max(hR9,hR10, hR11, hR15)
+   hRPVB = max(hR1, hR2, hR3, hR4, hR5, hR6, hR7, hR8, hR14)
+   if (hLPVB + hLPB + hLPM) == 0 or (hRPVB + hRPB + hRPM) == 0:
+      Lmotor = 0
+      Rmotor = 0
+   else:
+      Lmotor = (PVB * hLPVB + PB * hLPB + PM * hLPM) / (hLPVB + hLPB + hLPM)
+      Rmotor = (PVB * hRPVB + PB * hRPB + PM * hRPM) / (hRPVB + hRPB + hRPM)
+ 
+   return Lmotor, Rmotor
+
+def fuzzyturning(a, b):
+   #PM = 320
+   #PS = 285
+   #PVS = 250
+
+   PM = 400
+   PS = 380
+   PVS = 345
+   # a is PS
+   if (a >= 0) and (a < 0.45):
+       ai_ps = (1/0.45) * a
+   elif (a >= 0.45) and (a < 0.9):
+       ai_ps = -(1/0.45) * a + 2
+   else:
+       ai_ps = 0
+
+   # a is PB
+   if (a >= 0.45) and (a < 0.9):
+       ai_pb = (1/0.45) * a - 1
+   elif a >= 0.9:
+       ai_pb = 1
+   else:
+       ai_pb = 0
+       
+   # a is ZO
+   if (a >= 0) and (a < 0.45):
+      ai_zo = -(1/0.45) * a + 1
+   elif (a < 0) and (a > -0.45):
+       ai_zo = (1/0.45) * a + 1
+   else:
+       ai_zo = 0
+
+   # a is NS
+   if (a <= 0) and (a > -0.45):
+       ai_ns = -(1/0.45) * a
+   elif (a <= -0.45) and (a > -0.9):
+       ai_ns = (1/0.45) * a + 2
+
+   else:
+       ai_ns = 0
+       
+   # a is NB
+   if (a <= -0.45) and (a > -0.9):
+       ai_nb = -(1/0.45) * a - 1
+   elif a <= -0.9:
+       ai_nb = 1
+   else:
+       ai_nb = 0    
+
+
+   # b is P
+   if (b >= 0) and (b < 50):
+       bi_p = (1/50) * b
+   elif b < 0:
+       bi_p = 0
+   else:
+       bi_p = 1
+
+   # b is ZO
+   if (b >= 0) and (b < 50):
+       bi_zo = -(1/50) * b + 1
+   elif (b < 0) and (b > -50):
+       bi_zo = (1/50) * b + 1
+   else:
+       bi_zo = 0
+
+   # b is N
+   if (b <= 0) and (b > -50):
+       bi_n = -(1/50) * b
+   elif b < -50:
+       bi_n = 1
+   else:
+       bi_n = 0
+
+
+   ###rules
+   hR1 = min(ai_nb, bi_n)
+   print "rule1: %f\n " %hR1
+   hR2 = min(ai_nb, bi_zo)
+   print "rule2: %f\n " %hR2
+   hR3 = min(ai_nb, bi_p)
+   print "rule3: %f\n " %hR3
+   hR4 = min(ai_ns, bi_n)
+   print "rule4: %f\n " %hR4
+   hR5 = min(ai_ns, bi_zo)
+   print "rule5: %f\n " %hR5
+   hR6 = min(ai_ns, bi_p)
+   print "rule6: %f\n " %hR6
+   hR7 = min(ai_zo, bi_n)
+   print "rule7: %f\n " %hR7
+   hR8 = min(ai_zo, bi_zo)
+   print "rule8: %f\n " %hR8
+   hR9 = min(ai_zo, bi_p)
+   print "rule9: %f\n " %hR9
+   hR10 = min(ai_pb, bi_n)
+   print "rule10: %f\n " %hR10
+   hR11 = min(ai_pb, bi_zo)
+   print "rule11: %f\n " %hR11
+   hR12 = min(ai_pb, bi_p)
+   print "rule12: %f\n " %hR12
+   hR13 = min(ai_ps, bi_n)
+   print "rule13: %f\n " %hR13
+   hR14 = min(ai_ps, bi_zo)
+   print "rule14: %f\n " %hR14
+   hR15 = min(ai_ps, bi_p)
+   print "rule15: %f\n " %hR15
+
+   ###inference
+   hLPVS = max(hR1, hR3)
+   hLPS = max(hR2, hR4, hR5, hR6, hR7)
+   hLPM = max(hR8, hR9, hR10, hR11, hR12, hR13, hR14, hR15)
+   hRPVS = max(hR12 , hR10)
+   hRPS = max(hR9, hR11, hR14, hR13, hR15)
+   hRPM = max(hR1, hR2, hR3, hR4, hR5, hR6, hR7, hR8)
+
+   if (hLPVS + hLPS + hLPM) == 0 or (hRPVS + hRPS + hRPM) == 0:
+      Lmotor = 0
+      Rmotor = 0
+   else:
+      Lmotor = (PVS * hLPVS + PS * hLPS + PM * hLPM) / (hLPVS + hLPS + hLPM)
+      Rmotor = (PVS * hRPVS + PS * hRPS + PM * hRPM) / (hRPVS + hRPS + hRPM)
+ 
+   return Lmotor, Rmotor   
+
+
+def motorMov(signal, slope, bias, stop, duration):
+
+   ser = initiallize('/dev/ttyUSB0')
+   #print('Is open? ',ser.isOpen())
+   SetSpeedMod(ser)
+
+   if signal == 4 or stop == 1:
+     speedL = 0
+     speedR = 0
+     WheelSpeeds(ser, speedR,speedL)
+   elif signal == 1 and stop == 0:
+     speedL, speedR = fuzzyturning(slope, bias)
+     WheelSpeeds(ser, speedR,speedL)
+   elif signal == 3 and stop == 0:
+     speedL, speedR = fuzzyforwardR(slope, bias)
+     WheelSpeeds(ser, speedR,speedL)
+   elif signal == 2 and stop == 0:
+     speedL, speedR = fuzzyturning(slope, bias)
+     WheelSpeeds(ser, speedR,speedL)
+   elif signal == "7" and stop == 0:
+     speedL, speedR = fuzzyforwardL(slope, bias)
+     WheelSpeeds(ser, speedR,speedL)
+   elif signal == 5 and stop == 0:
+     speedL = 50
+     speedR = -50
+     WheelSpeeds(ser, speedR,speedL)
+     time.sleep(duration)
+     speedL = 0
+     speedR = 0
+     WheelSpeeds(ser, speedR,speedL)
+   elif signal == 6 and stop == 0:
+     speedL = -50
+     speedR = 50
+     WheelSpeeds(ser, speedR,speedL)
+     time.sleep(duration)
+     speedL = 0
+     speedR = 0
+     WheelSpeeds(ser, speedR,speedL)
+   print "output left: %f\n" %speedL
+   print "output right: %f\n" %speedR
+   #print('send sucess?',bool(WheelSpeeds(ser, speedR,speedL)))
+   #time.sleep(1)
+   
+  
+   ser.close()             # close port
+   #print('Is open? ',ser.isOpen())
